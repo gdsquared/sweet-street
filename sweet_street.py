@@ -11,6 +11,13 @@ st.set_page_config(page_title="Sweet Street", page_icon="🍰", layout="centered
 
 st.markdown("""
 <style>
+    /* Mobile: prevent viewport drag and overscroll */
+    html, body { overscroll-behavior: none; overflow-x: hidden; -webkit-overflow-scrolling: auto; }
+    .stApp { overscroll-behavior: none; overflow-x: hidden; }
+    @media (pointer: coarse), (max-width: 768px) {
+        html, body { touch-action: pan-y; overflow-x: hidden; }
+        .stApp { overflow-x: hidden; -webkit-overflow-scrolling: touch; }
+    }
     .stApp { background-color: #FFF8E7; }
     [data-testid="stSidebar"] {
         background-color: #FFB7B2;
@@ -73,6 +80,12 @@ GAME_DATA = {
         "Dark Ganache": {"color": "#3E2723", "tags": ["Decadent", "Heavy"]},
         "Lemon Curd": {"color": "#FFF176", "tags": ["Zesty", "Bright"]},
         "Cherry Compote": {"color": "#C62828", "tags": ["Tart", "Deep"]},
+        "Raspberry Jam": {"color": "#E91E63", "tags": ["Sweet", "Tart"]},
+        "Salted Caramel": {"color": "#D4A574", "tags": ["Rich", "Decadent"]},
+        "Coconut Cream": {"color": "#F5F5DC", "tags": ["Smooth", "Light"]},
+        "Mocha Mousse": {"color": "#4E342E", "tags": ["Rich", "Dark"]},
+        "Cream Cheese": {"color": "#FFF8DC", "tags": ["Smooth", "Comfort"]},
+        "Passion Fruit": {"color": "#FFB74D", "tags": ["Zesty", "Bright"]},
     },
     "frostings": {
         "Cherry Red": {"color": "#D32F2F", "vibe": "Romantic", "stroke": "#B71C1C"},
@@ -237,18 +250,29 @@ def get_player_level():
     return (st.session_state.score // 10) + 1
 
 def get_available_bases():
-    """Bases unlocked for current level: 3 at level 1, +1 per level after."""
+    """Bases unlocked for current level: 3 at level 1, +1 per level up to 5 (all 7 bases)."""
     level = get_player_level()
     all_bases = list(GAME_DATA["bases"].keys())
     return all_bases[: min(2 + level, len(all_bases))]
 
+def get_available_fillings():
+    """Fillings: 4 at levels 1–5, then +1 per level from 50 stars (level 6) onward."""
+    level = get_player_level()
+    all_fillings = list(GAME_DATA["fillings"].keys())
+    if level <= 5:
+        return all_fillings[:4]
+    # Level 6 = 5 fillings, level 7 = 6, etc.
+    n = 4 + (level - 5)
+    return all_fillings[: min(n, len(all_fillings))]
+
 def next_level():
     st.session_state.level_idx = (st.session_state.level_idx + 1) % len(CHARACTERS)
     st.session_state.current_order = random.choice(ORDERS)
-    available = get_available_bases()
+    available_bases = get_available_bases()
+    available_fillings = get_available_fillings()
     st.session_state.final_cake = {
-        "base": available[0],
-        "filling": list(GAME_DATA["fillings"].keys())[0],
+        "base": available_bases[0],
+        "filling": available_fillings[0],
         "frosting": list(GAME_DATA["frostings"].keys())[0],
         "decorations": []
     }
@@ -281,8 +305,17 @@ with st.sidebar:
     st.title("Sweet Street")
     st.metric("Level", current_level)
     st.metric("Total Score", f"{st.session_state.score} Stars")
-    next_at = current_level * 10
-    st.caption(f"New cake flavor at {next_at} stars")
+    all_fillings = list(GAME_DATA["fillings"].keys())
+    if current_level <= 5:
+        next_at = current_level * 10
+        st.caption(f"New cake flavor at {next_at} stars")
+    else:
+        next_at = 50 + (current_level - 5) * 10
+        n_fillings = len(get_available_fillings())
+        if n_fillings >= len(all_fillings):
+            st.caption("All fillings unlocked!")
+        else:
+            st.caption(f"New filling at {next_at} stars")
     if st.session_state.get("phase") in ("BAKE", "DECORATE"):
         cake_timer()
     st.info("💡 Hint: Read the customer's quote carefully. Colors and feelings matter more than recipes!")
@@ -323,10 +356,15 @@ elif st.session_state.phase == "BAKE":
             index=available_bases.index(current_base)
         )
         
+        available_fillings = get_available_fillings()
+        current_filling = st.session_state.final_cake["filling"]
+        if current_filling not in available_fillings:
+            current_filling = available_fillings[0]
+            st.session_state.final_cake["filling"] = current_filling
         selected_filling = st.selectbox(
             "Choose Filling", 
-            list(GAME_DATA["fillings"].keys()),
-            index=list(GAME_DATA["fillings"].keys()).index(st.session_state.final_cake["filling"])
+            available_fillings, 
+            index=available_fillings.index(current_filling)
         )
         
         # Update the visual preview immediately in memory so the left col sees it
@@ -361,23 +399,59 @@ elif st.session_state.phase == "DECORATE":
         st.subheader("Apply Toppings")
         st.info(f"Order: \"{current_order['quote']}\"")
         
-        # Frosting
-        selected_frosting = st.radio(
-            "Select Frosting", 
-            list(GAME_DATA["frostings"].keys()),
-            index=list(GAME_DATA["frostings"].keys()).index(st.session_state.final_cake["frosting"])
-        )
+        # Frosting — compact grid of color swatches
+        st.markdown("**Select Frosting**")
+        frost_names = list(GAME_DATA["frostings"].keys())
+        current_frosting = st.session_state.final_cake["frosting"]
+        cols_per_row = 5
+        for i in range(0, len(frost_names), cols_per_row):
+            row = st.columns(cols_per_row)
+            for j, col in enumerate(row):
+                idx = i + j
+                if idx >= len(frost_names):
+                    break
+                name = frost_names[idx]
+                with col:
+                    fd = GAME_DATA["frostings"][name]
+                    color = fd["color"]
+                    stroke = fd.get("stroke", "#ccc")
+                    is_selected = current_frosting == name
+                    border = "2px solid #5D4037" if is_selected else f"1px solid {stroke}"
+                    st.markdown(
+                        f'<div style="height:20px; background:{color}; border-radius:6px; border:{border}; margin-bottom:2px;" title="{name}"></div>',
+                        unsafe_allow_html=True
+                    )
+                    btn_label = f"✓ {name}" if is_selected else name
+                    if st.button(btn_label, key=f"frost_{name}_{st.session_state.level_idx}"):
+                        st.session_state.final_cake["frosting"] = name
+                        st.rerun()
+        selected_frosting = st.session_state.final_cake["frosting"]
         
-        # Decorations (up to 3 toppings)
-        selected_decos = st.multiselect(
-            "Add Toppings (Max 3)", 
-            list(GAME_DATA["decorations"].keys()),
-            default=st.session_state.final_cake["decorations"],
-            max_selections=3,
-            key=f"toppings_{st.session_state.level_idx}"
-        )
+        # Toppings — grid of icon swatches (click to toggle, max 3)
+        st.markdown("**Add Toppings (Max 3)** — click to toggle")
+        deco_names = list(GAME_DATA["decorations"].keys())
+        selected_decos = st.session_state.final_cake["decorations"].copy()
+        for i in range(0, len(deco_names), cols_per_row):
+            row = st.columns(cols_per_row)
+            for j, col in enumerate(row):
+                idx = i + j
+                if idx >= len(deco_names):
+                    break
+                name = deco_names[idx]
+                with col:
+                    icon = GAME_DATA["decorations"][name]["icon"]
+                    is_selected = name in selected_decos
+                    label = f"{icon} ✓" if is_selected else icon
+                    if st.button(label, key=f"deco_{name}_{st.session_state.level_idx}"):
+                        if name in selected_decos:
+                            selected_decos.remove(name)
+                        elif len(selected_decos) < 3:
+                            selected_decos.append(name)
+                        st.session_state.final_cake["decorations"] = selected_decos
+                        st.rerun()
+                    st.caption(name)
 
-        # Update memory for preview
+        # Update memory for preview (in case of no click this run)
         st.session_state.final_cake["frosting"] = selected_frosting
         st.session_state.final_cake["decorations"] = selected_decos
         
